@@ -10,94 +10,84 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-      - name: Send Telegram notifications
+      - name: Debug and send
         env:
           BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
         run: |
-          echo "🔍 Checking schedule..."
-          
-          # Current time in Almaty (UTC+5)
+          echo "===== STEP 1: TIME CHECK ====="
           HOUR=$(TZ='Asia/Almaty' date +%-H)
           MIN=$(TZ='Asia/Almaty' date +%-M)
           DAY=$(TZ='Asia/Almaty' date +%u)
           DAY_IDX=$((DAY - 1))
           CUR=$((HOUR * 60 + MIN))
           CUR5=$((CUR + 5))
+          echo "Time: $HOUR:$MIN, Day: $DAY_IDX, Cur: $CUR, Cur+5: $CUR5"
           
-          echo "⏰ $HOUR:$MIN (Day $DAY_IDX, $CUR min)"
-          
-          # Get all telegram users
-          TELEGRAM_DATA=$(curl -s "$SUPABASE_URL/rest/v1/telegram_users?select=user_id,telegram_id" \
+          echo ""
+          echo "===== STEP 2: TELEGRAM USERS ====="
+          USERS=$(curl -s "$SUPABASE_URL/rest/v1/telegram_users?select=telegram_id" \
             -H "apikey: $SUPABASE_ANON_KEY" \
             -H "Authorization: Bearer $SUPABASE_ANON_KEY")
+          echo "Raw response: $USERS"
           
-          echo "👥 Telegram users: $TELEGRAM_DATA"
+          TELEGRAM_IDS=$(echo "$USERS" | grep -oP '"telegram_id"\s*:\s*"\K[^"]+' | sort -u)
+          echo "Extracted IDs:"
+          echo "$TELEGRAM_IDS"
+          ID_COUNT=$(echo "$TELEGRAM_IDS" | grep -c . || echo 0)
+          echo "Count: $ID_COUNT"
           
-          # Extract unique telegram IDs
-          TELEGRAM_IDS=$(echo "$TELEGRAM_DATA" | grep -o '"telegram_id":"[^"]*"' | cut -d'"' -f4 | sort -u)
-          
-          if [ -z "$TELEGRAM_IDS" ]; then
-            echo "⚠️ No telegram users found"
+          if [ "$ID_COUNT" -eq 0 ]; then
+            echo "ERROR: No telegram IDs found! Aborting."
             exit 0
           fi
           
-          # Get events for today
-          EVENTS=$(curl -s "$SUPABASE_URL/rest/v1/events?select=user_id,title,start_time,end_time&day_of_week=eq.$DAY_IDX" \
+          echo ""
+          echo "===== STEP 3: EVENTS ====="
+          EVENTS=$(curl -s "$SUPABASE_URL/rest/v1/events?select=*&day_of_week=eq.$DAY_IDX" \
             -H "apikey: $SUPABASE_ANON_KEY" \
             -H "Authorization: Bearer $SUPABASE_ANON_KEY")
+          echo "Events for day $DAY_IDX:"
+          echo "$EVENTS" | python3 -m json.tool 2>/dev/null || echo "$EVENTS"
           
-          echo "📋 Events: $EVENTS"
-          
-          # Send notifications via Python
+          echo ""
+          echo "===== STEP 4: MATCHING ====="
           echo "$EVENTS" | python3 -c "
-          import json, sys, urllib.request, os, urllib.parse
+import json, sys
+events = json.load(sys.stdin)
+cur = $CUR
+cur5 = $CUR5
+print(f'Checking against cur={cur}, cur5={cur5}')
+print()
+for e in events:
+    try:
+        st = e['start_time'][:5]
+        et = e['end_time'][:5]
+        sh, sm = map(int, e['start_time'].split(':')[:2])
+        eh, em = map(int, e['end_time'].split(':')[:2])
+        start = sh * 60 + sm
+        end = eh * 60 + em
+        title = e['title']
+        match = ''
+        if start == cur5:
+            match = '🔔 MATCH (5 min before)'
+        elif start == cur:
+            match = '� MATCH (started now)'
+        elif end == cur:
+            match = '🔔 MATCH (ended now)'
+        print(f'  {title}: {st}-{et} ({start}-{end}) {match}')
+    except Exception as ex:
+        print(f'  Error: {ex}')
+"
           
-          events = json.load(sys.stdin)
-          cur = $CUR
-          cur5 = $CUR5
-          bot_token = os.environ['BOT_TOKEN']
-          
-          telegram_ids = '''$TELEGRAM_IDS'''.strip().split('\n')
-          telegram_ids = [t for t in telegram_ids if t]
-          
-          if not telegram_ids:
-              print('No telegram IDs found')
-              sys.exit(0)
-          
-          messages = []
-          
-          for e in events:
-              try:
-                  sh, sm = map(int, e['start_time'].split(':')[:2])
-                  eh, em = map(int, e['end_time'].split(':')[:2])
-                  start = sh * 60 + sm
-                  end = eh * 60 + em
-                  title = e['title']
-                  ts = e['start_time'][:5]
-                  te = e['end_time'][:5]
-                  
-                  if start == cur5:
-                      messages.append(f'⏰ Через 5 минут: {title}\\n🕐 {ts} - {te}')
-                  elif start == cur:
-                      messages.append(f'🔴 Началось: {title}\\n🕐 {ts} - {te}')
-                  elif end == cur:
-                      messages.append(f'✅ Закончилось: {title}')
-              except Exception as ex:
-                  print(f'Error processing event: {ex}')
-                  continue
-          
-          for msg in messages:
-              print(f'📤 {msg}')
-              encoded = urllib.parse.quote(msg)
-              for tid in telegram_ids:
-                  url = f'https://api.telegram.org/bot{bot_token}/sendMessage?chat_id={tid}&text={encoded}'
-                  try:
-                      resp = urllib.request.urlopen(url)
-                      print(f'  → Sent to {tid}: {resp.status}')
-                  except Exception as ex:
-                      print(f'  → Error for {tid}: {ex}')
-          "
-          
-          echo "✅ Done!"
+          echo ""
+          echo "===== STEP 5: SENDING ====="
+          # Test direct send
+          for tid in $TELEGRAM_IDS; do
+            echo "Trying to send to: $tid"
+            RESPONSE=$(curl -s -X POST "https://api.telegram.org/bot$BOT_TOKEN/sendMessage" \
+              -H "Content-Type: application/json" \
+              -d "{\"chat_id\": \"$tid\", \"text\": \"🧪 Тест! Уведомления работают. Время: $(TZ='Asia/Almaty' date +%H:%M)\"}")
+            echo "Response: $RESPONSE"
+          done
