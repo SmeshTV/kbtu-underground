@@ -27,67 +27,30 @@ jobs:
           
           echo ""
           echo "===== STEP 2: TELEGRAM USERS ====="
-          USERS=$(curl -s "$SUPABASE_URL/rest/v1/telegram_users?select=telegram_id" \
-            -H "apikey: $SUPABASE_ANON_KEY" \
-            -H "Authorization: Bearer $SUPABASE_ANON_KEY")
+          USERS=$(curl -s "$SUPABASE_URL/rest/v1/telegram_users?select=telegram_id" -H "apikey: $SUPABASE_ANON_KEY" -H "Authorization: Bearer $SUPABASE_ANON_KEY")
           echo "Raw response: $USERS"
-          
           TELEGRAM_IDS=$(echo "$USERS" | grep -oP '"telegram_id"\s*:\s*"\K[^"]+' | sort -u)
-          echo "Extracted IDs:"
-          echo "$TELEGRAM_IDS"
-          ID_COUNT=$(echo "$TELEGRAM_IDS" | grep -c . || echo 0)
-          echo "Count: $ID_COUNT"
+          echo "Extracted IDs: $TELEGRAM_IDS"
           
-          if [ "$ID_COUNT" -eq 0 ]; then
-            echo "ERROR: No telegram IDs found! Aborting."
+          if [ -z "$TELEGRAM_IDS" ]; then
+            echo "ERROR: No telegram IDs found!"
             exit 0
           fi
           
           echo ""
           echo "===== STEP 3: EVENTS ====="
-          EVENTS=$(curl -s "$SUPABASE_URL/rest/v1/events?select=*&day_of_week=eq.$DAY_IDX" \
-            -H "apikey: $SUPABASE_ANON_KEY" \
-            -H "Authorization: Bearer $SUPABASE_ANON_KEY")
-          echo "Events for day $DAY_IDX:"
-          echo "$EVENTS" | python3 -m json.tool 2>/dev/null || echo "$EVENTS"
+          EVENTS=$(curl -s "$SUPABASE_URL/rest/v1/events?select=*&day_of_week=eq.$DAY_IDX" -H "apikey: $SUPABASE_ANON_KEY" -H "Authorization: Bearer $SUPABASE_ANON_KEY")
+          echo "Events: $EVENTS"
           
           echo ""
           echo "===== STEP 4: MATCHING ====="
-          echo "$EVENTS" | python3 -c "
-import json, sys
-events = json.load(sys.stdin)
-cur = $CUR
-cur5 = $CUR5
-print(f'Checking against cur={cur}, cur5={cur5}')
-print()
-for e in events:
-    try:
-        st = e['start_time'][:5]
-        et = e['end_time'][:5]
-        sh, sm = map(int, e['start_time'].split(':')[:2])
-        eh, em = map(int, e['end_time'].split(':')[:2])
-        start = sh * 60 + sm
-        end = eh * 60 + em
-        title = e['title']
-        match = ''
-        if start == cur5:
-            match = '🔔 MATCH (5 min before)'
-        elif start == cur:
-            match = '� MATCH (started now)'
-        elif end == cur:
-            match = '🔔 MATCH (ended now)'
-        print(f'  {title}: {st}-{et} ({start}-{end}) {match}')
-    except Exception as ex:
-        print(f'  Error: {ex}')
-"
+          echo "$EVENTS" | python3 -c "import json,sys; [print(f'  {e.get(chr(116)+chr(105)+chr(116)+chr(108)+chr(101),chr(85)+chr(110)+chr(116)+chr(105)+chr(116)+chr(108)+chr(101)+chr(100))}: {e.get(chr(115)+chr(116)+chr(97)+chr(114)+chr(116)+chr(95)+chr(116)+chr(105)+chr(109)+chr(101),chr(63)+chr(85)+chr(63))}-{e.get(chr(101)+chr(110)+chr(100)+chr(95)+chr(116)+chr(105)+chr(109)+chr(101),chr(63)+chr(85)+chr(63))}') for e in json.load(sys.stdin)]"
           
           echo ""
-          echo "===== STEP 5: SENDING ====="
-          # Test direct send
+          echo "===== STEP 5: SENDING TEST ====="
           for tid in $TELEGRAM_IDS; do
-            echo "Trying to send to: $tid"
-            RESPONSE=$(curl -s -X POST "https://api.telegram.org/bot$BOT_TOKEN/sendMessage" \
-              -H "Content-Type: application/json" \
-              -d "{\"chat_id\": \"$tid\", \"text\": \"🧪 Тест! Уведомления работают. Время: $(TZ='Asia/Almaty' date +%H:%M)\"}")
-            echo "Response: $RESPONSE"
+            echo "Sending to: $tid"
+            MSG=$(TZ='Asia/Almaty' date +"Test OK: %H:%M")
+            RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "https://api.telegram.org/bot$BOT_TOKEN/sendMessage" -H "Content-Type: application/json" -d "{\"chat_id\": \"$tid\", \"text\": \"$MSG\"}")
+            echo "HTTP response: $RESPONSE"
           done
