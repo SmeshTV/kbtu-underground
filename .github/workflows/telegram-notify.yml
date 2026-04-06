@@ -8,7 +8,6 @@ on:
 jobs:
   notify:
     runs-on: ubuntu-latest
-    
     steps:
       - name: Debug and send
         env:
@@ -16,42 +15,36 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
         run: |
-          echo "===== STEP 1: TIME CHECK ====="
+          echo "===== STEP 1: TIME ====="
           HOUR=$(TZ='Asia/Almaty' date +%-H)
           MIN=$(TZ='Asia/Almaty' date +%-M)
           DAY=$(TZ='Asia/Almaty' date +%u)
           DAY_IDX=$((DAY - 1))
           CUR=$((HOUR * 60 + MIN))
           CUR5=$((CUR + 5))
-          echo "Time: $HOUR:$MIN, Day: $DAY_IDX, Cur: $CUR, Cur+5: $CUR5"
-          
+          echo "Time: $HOUR:$MIN Day: $DAY_IDX Cur: $CUR Cur+5: $CUR5"
           echo ""
           echo "===== STEP 2: TELEGRAM USERS ====="
           USERS=$(curl -s "$SUPABASE_URL/rest/v1/telegram_users?select=telegram_id" -H "apikey: $SUPABASE_ANON_KEY" -H "Authorization: Bearer $SUPABASE_ANON_KEY")
-          echo "Raw response: $USERS"
+          echo "Users: $USERS"
           TELEGRAM_IDS=$(echo "$USERS" | grep -oP '"telegram_id"\s*:\s*"\K[^"]+' | sort -u)
-          echo "Extracted IDs: $TELEGRAM_IDS"
-          
+          echo "IDs: $TELEGRAM_IDS"
           if [ -z "$TELEGRAM_IDS" ]; then
-            echo "ERROR: No telegram IDs found!"
+            echo "ERROR: No IDs!"
             exit 0
           fi
-          
           echo ""
           echo "===== STEP 3: EVENTS ====="
           EVENTS=$(curl -s "$SUPABASE_URL/rest/v1/events?select=*&day_of_week=eq.$DAY_IDX" -H "apikey: $SUPABASE_ANON_KEY" -H "Authorization: Bearer $SUPABASE_ANON_KEY")
           echo "Events: $EVENTS"
-          
           echo ""
           echo "===== STEP 4: MATCHING ====="
-          echo "$EVENTS" | python3 -c "import json,sys; [print(f'  {e.get(chr(116)+chr(105)+chr(116)+chr(108)+chr(101),chr(85)+chr(110)+chr(116)+chr(105)+chr(116)+chr(108)+chr(101)+chr(100))}: {e.get(chr(115)+chr(116)+chr(97)+chr(114)+chr(116)+chr(95)+chr(116)+chr(105)+chr(109)+chr(101),chr(63)+chr(85)+chr(63))}-{e.get(chr(101)+chr(110)+chr(100)+chr(95)+chr(116)+chr(105)+chr(109)+chr(101),chr(63)+chr(85)+chr(63))}') for e in json.load(sys.stdin)]"
-          
+          echo "$EVENTS" | python3 -c "import json,sys; data=json.load(sys.stdin); [print(f'  {e.get(\"title\",\"?\")}: {e.get(\"start_time\",\"?\")}-{e.get(\"end_time\",\"?\")}') for e in data]"
           echo ""
-          echo "===== STEP 5: SENDING TEST ====="
+          echo "===== STEP 5: TEST SEND ====="
           for tid in $TELEGRAM_IDS; do
             echo "Sending to: $tid"
             MSG=$(TZ='Asia/Almaty' date +"Test OK: %H:%M")
-            RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "https://api.telegram.org/bot$BOT_TOKEN/sendMessage" -H "Content-Type: application/json" -d "{\"chat_id\": \"$tid\", \"text\": \"$MSG\"}")
-            echo "HTTP response: $RESPONSE"
+            curl -s -o /dev/null -w "%{http_code}" -X POST "https://api.telegram.org/bot$BOT_TOKEN/sendMessage" -H "Content-Type: application/json" -d "{\"chat_id\": \"$tid\", \"text\": \"$MSG\"}"
+            echo ""
           done
-"# debug"  
