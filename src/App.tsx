@@ -61,6 +61,8 @@ function App() {
   const [favorites, setFavorites] = useState<{ questions: Question[]; categories: Category[] }>({ questions: [], categories: [] });
   const [showFavorites, setShowFavorites] = useState(false);
   const [favoritesLoading, setFavoritesLoading] = useState(false);
+  const [showConnectModal, setShowConnectModal] = useState(false);
+  const [connectCode, setConnectCode] = useState('');
 
   // Load favorites from Supabase
   const loadFavorites = useCallback(async (userId: string) => {
@@ -90,6 +92,23 @@ function App() {
       setFavoritesLoading(false);
     }
   }, []);
+
+  // Генерация кода для привязки Telegram
+  const generateConnectCode = async () => {
+    if (!currentUser) return;
+    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    setConnectCode(code);
+    setShowConnectModal(true);
+
+    const { error } = await supabase.from('connect_codes').insert({
+      user_id: currentUser.uid,
+      code,
+    });
+
+    if (error) {
+      console.error('Error saving connect code:', error);
+    }
+  };
 
   // Общая функция для скачивания файлов
   const handleDownload = (fileName: string) => {
@@ -648,6 +667,13 @@ function App() {
                       <span className="truncate">{currentUser?.email}</span>
                     </div>
                     <button
+                      onClick={generateConnectCode}
+                      className="text-sm text-yellow-400 hover:text-yellow-300 transition-colors flex-shrink-0"
+                      title="Привязать Telegram"
+                    >
+                      📱 Telegram
+                    </button>
+                    <button
                       onClick={handleLogout}
                       className="text-sm text-red-400 hover:text-red-300 transition-colors flex-shrink-0"
                     >
@@ -907,6 +933,35 @@ function App() {
         onClose={() => setShowAuthModal(false)}
         onAuthSuccess={handleAuthSuccess}
       />
+
+      {showConnectModal && (
+        <div className="fixed inset-0 bg-black/80 z-[99999] flex items-center justify-center p-4">
+          <div className="bg-gray-900 border border-cyan-500/30 rounded-2xl p-8 max-w-sm w-full text-center shadow-2xl">
+            <div className="text-5xl mb-4">📱</div>
+            <h2 className="text-xl font-bold text-white mb-2">Привязать Telegram</h2>
+            <p className="text-gray-400 text-sm mb-4">
+              Напиши боту <b className="text-cyan-400">@undegroundForStudent_bot</b> этот код:
+            </p>
+            <div className="bg-gray-800 border-2 border-cyan-500/50 rounded-xl p-4 mb-4">
+              <div className="text-4xl font-mono font-bold text-cyan-400 tracking-widest select-all">
+                {connectCode}
+              </div>
+            </div>
+            <p className="text-gray-500 text-xs mb-4">
+              Команда: <code className="bg-gray-800 px-2 py-1 rounded text-yellow-400">/connect {connectCode}</code>
+            </p>
+            <p className="text-gray-500 text-xs mb-4">
+              Код действует 10 минут
+            </p>
+            <button
+              onClick={() => setShowConnectModal(false)}
+              className="w-full py-3 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white font-bold rounded-xl transition-all"
+            >
+              Закрыть
+            </button>
+          </div>
+        </div>
+      )}
 
       {showDisclaimer && (
         <DisclaimerModal

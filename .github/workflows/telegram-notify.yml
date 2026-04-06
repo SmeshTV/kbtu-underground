@@ -18,7 +18,7 @@ jobs:
         run: |
           echo "🔍 Checking schedule..."
           
-          # Current time in Almaty
+          # Current time in Almaty (UTC+5)
           HOUR=$(TZ='Asia/Almaty' date +%-H)
           MIN=$(TZ='Asia/Almaty' date +%-M)
           DAY=$(TZ='Asia/Almaty' date +%u)
@@ -28,37 +28,43 @@ jobs:
           
           echo "⏰ $HOUR:$MIN (Day $DAY_IDX, $CUR min)"
           
-          # Get events
-          EVENTS=$(curl -s "$SUPABASE_URL/rest/v1/events?select=*&day_of_week=eq.$DAY_IDX" \
+          # Get all telegram users
+          TELEGRAM_DATA=$(curl -s "$SUPABASE_URL/rest/v1/telegram_users?select=user_id,telegram_id" \
             -H "apikey: $SUPABASE_ANON_KEY" \
             -H "Authorization: Bearer $SUPABASE_ANON_KEY")
           
-          # Get subscribers
-          USERS=$(curl -s "$SUPABASE_URL/rest/v1/telegram_users?select=telegram_id" \
-            -H "apikey: $SUPABASE_ANON_KEY" \
-            -H "Authorization: Bearer $SUPABASE_ANON_KEY")
+          echo "👥 Telegram users: $TELEGRAM_DATA"
           
-          USER_COUNT=$(echo "$USERS" | grep -c 'telegram_id' || echo 0)
-          echo "👥 Subscribers: $USER_COUNT"
+          # Extract unique telegram IDs
+          TELEGRAM_IDS=$(echo "$TELEGRAM_DATA" | grep -o '"telegram_id":"[^"]*"' | cut -d'"' -f4 | sort -u)
           
-          if [ "$USER_COUNT" -eq 0 ]; then
-            echo "⚠️ No subscribers yet"
+          if [ -z "$TELEGRAM_IDS" ]; then
+            echo "⚠️ No telegram users found"
             exit 0
           fi
           
-          # Extract telegram IDs
-          TELEGRAM_IDS=$(echo "$USERS" | grep -o '"telegram_id":"[^"]*"' | cut -d'"' -f4)
+          # Get events for today
+          EVENTS=$(curl -s "$SUPABASE_URL/rest/v1/events?select=user_id,title,start_time,end_time&day_of_week=eq.$DAY_IDX" \
+            -H "apikey: $SUPABASE_ANON_KEY" \
+            -H "Authorization: Bearer $SUPABASE_ANON_KEY")
           
-          # Process events and send
+          echo "📋 Events: $EVENTS"
+          
+          # Send notifications via Python
           echo "$EVENTS" | python3 -c "
-          import json, sys, urllib.request, os
+          import json, sys, urllib.request, os, urllib.parse
           
           events = json.load(sys.stdin)
           cur = $CUR
           cur5 = $CUR5
           bot_token = os.environ['BOT_TOKEN']
+          
           telegram_ids = '''$TELEGRAM_IDS'''.strip().split('\n')
-          telegram_ids = [tid for tid in telegram_ids if tid]
+          telegram_ids = [t for t in telegram_ids if t]
+          
+          if not telegram_ids:
+              print('No telegram IDs found')
+              sys.exit(0)
           
           messages = []
           
@@ -73,19 +79,20 @@ jobs:
                   te = e['end_time'][:5]
                   
                   if start == cur5:
-                      messages.append(f'⏰ Через 5 минут: {title}\n🕐 {ts} - {te}')
+                      messages.append(f'⏰ Через 5 минут: {title}\\n🕐 {ts} - {te}')
                   elif start == cur:
-                      messages.append(f'🔴 Началось: {title}\n🕐 {ts} - {te}')
+                      messages.append(f'🔴 Началось: {title}\\n🕐 {ts} - {te}')
                   elif end == cur:
                       messages.append(f'✅ Закончилось: {title}')
-              except:
-                  pass
+              except Exception as ex:
+                  print(f'Error processing event: {ex}')
+                  continue
           
           for msg in messages:
               print(f'📤 {msg}')
-              encoded_msg = urllib.parse.quote(msg)
+              encoded = urllib.parse.quote(msg)
               for tid in telegram_ids:
-                  url = f'https://api.telegram.org/bot{bot_token}/sendMessage?chat_id={tid}&text={encoded_msg}&parse_mode=HTML'
+                  url = f'https://api.telegram.org/bot{bot_token}/sendMessage?chat_id={tid}&text={encoded}'
                   try:
                       resp = urllib.request.urlopen(url)
                       print(f'  → Sent to {tid}: {resp.status}')
