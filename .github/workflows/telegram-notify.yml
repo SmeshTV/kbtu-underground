@@ -1,0 +1,96 @@
+name: Telegram Schedule Notifications
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Send Telegram notifications
+        env:
+          BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: |
+          echo "🔍 Checking schedule..."
+          
+          # Current time in Almaty
+          HOUR=$(TZ='Asia/Almaty' date +%-H)
+          MIN=$(TZ='Asia/Almaty' date +%-M)
+          DAY=$(TZ='Asia/Almaty' date +%u)
+          DAY_IDX=$((DAY - 1))
+          CUR=$((HOUR * 60 + MIN))
+          CUR5=$((CUR + 5))
+          
+          echo "⏰ $HOUR:$MIN (Day $DAY_IDX, $CUR min)"
+          
+          # Get events
+          EVENTS=$(curl -s "$SUPABASE_URL/rest/v1/events?select=*&day_of_week=eq.$DAY_IDX" \
+            -H "apikey: $SUPABASE_ANON_KEY" \
+            -H "Authorization: Bearer $SUPABASE_ANON_KEY")
+          
+          # Get subscribers
+          USERS=$(curl -s "$SUPABASE_URL/rest/v1/telegram_users?select=telegram_id" \
+            -H "apikey: $SUPABASE_ANON_KEY" \
+            -H "Authorization: Bearer $SUPABASE_ANON_KEY")
+          
+          USER_COUNT=$(echo "$USERS" | grep -c 'telegram_id' || echo 0)
+          echo "👥 Subscribers: $USER_COUNT"
+          
+          if [ "$USER_COUNT" -eq 0 ]; then
+            echo "⚠️ No subscribers yet"
+            exit 0
+          fi
+          
+          # Extract telegram IDs
+          TELEGRAM_IDS=$(echo "$USERS" | grep -o '"telegram_id":"[^"]*"' | cut -d'"' -f4)
+          
+          # Process events and send
+          echo "$EVENTS" | python3 -c "
+          import json, sys, urllib.request, os
+          
+          events = json.load(sys.stdin)
+          cur = $CUR
+          cur5 = $CUR5
+          bot_token = os.environ['BOT_TOKEN']
+          telegram_ids = '''$TELEGRAM_IDS'''.strip().split('\n')
+          telegram_ids = [tid for tid in telegram_ids if tid]
+          
+          messages = []
+          
+          for e in events:
+              try:
+                  sh, sm = map(int, e['start_time'].split(':')[:2])
+                  eh, em = map(int, e['end_time'].split(':')[:2])
+                  start = sh * 60 + sm
+                  end = eh * 60 + em
+                  title = e['title']
+                  ts = e['start_time'][:5]
+                  te = e['end_time'][:5]
+                  
+                  if start == cur5:
+                      messages.append(f'⏰ Через 5 минут: {title}\n🕐 {ts} - {te}')
+                  elif start == cur:
+                      messages.append(f'🔴 Началось: {title}\n🕐 {ts} - {te}')
+                  elif end == cur:
+                      messages.append(f'✅ Закончилось: {title}')
+              except:
+                  pass
+          
+          for msg in messages:
+              print(f'📤 {msg}')
+              encoded_msg = urllib.parse.quote(msg)
+              for tid in telegram_ids:
+                  url = f'https://api.telegram.org/bot{bot_token}/sendMessage?chat_id={tid}&text={encoded_msg}&parse_mode=HTML'
+                  try:
+                      resp = urllib.request.urlopen(url)
+                      print(f'  → Sent to {tid}: {resp.status}')
+                  except Exception as ex:
+                      print(f'  → Error for {tid}: {ex}')
+          "
+          
+          echo "✅ Done!"
