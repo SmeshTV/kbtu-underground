@@ -1,0 +1,56 @@
+name: Schedule Push Notifications
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'  # Every 5 minutes
+  workflow_dispatch:  # Manual trigger from GitHub UI
+
+jobs:
+  send-notifications:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Check time and send notifications
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: |
+          echo "🕐 Starting notification check..."
+          
+          # Get current time in Almaty (UTC+5)
+          CURRENT_HOUR=$(TZ='Asia/Almaty' date +%H)
+          CURRENT_MIN=$(TZ='Asia/Almaty' date +%M)
+          CURRENT_DAY=$(TZ='Asia/Almaty' date +%u)  # 1=Mon, 7=Sun
+          DAY_INDEX=$((CURRENT_DAY - 1))  # 0=Mon, 6=Sun
+          
+          echo "📍 Almaty time: $CURRENT_HOUR:$CURRENT_MIN, Day index: $DAY_INDEX"
+          
+          # Calculate minutes from midnight
+          CURRENT_TOTAL_MIN=$((10#$CURRENT_HOUR * 60 + 10#$CURRENT_MIN))
+          
+          # Get events for today from Supabase
+          echo "📡 Fetching events for day $DAY_INDEX..."
+          EVENTS=$(curl -s -X GET \
+            "$SUPABASE_URL/rest/v1/events?select=*&day_of_week=eq.$DAY_INDEX&order=start_time.asc" \
+            -H "apikey: $SUPABASE_ANON_KEY" \
+            -H "Authorization: Bearer $SUPABASE_ANON_KEY" \
+            -H "Prefer: return=representation")
+          
+          echo "📋 Events found: $EVENTS"
+          
+          # Get push tokens
+          echo "📱 Fetching push tokens..."
+          TOKENS=$(curl -s -X GET \
+            "$SUPABASE_URL/rest/v1/push_tokens?select=token" \
+            -H "apikey: $SUPABASE_ANON_KEY" \
+            -H "Authorization: Bearer $SUPABASE_ANON_KEY")
+          
+          TOKEN_COUNT=$(echo "$TOKENS" | grep -c '"token"' || true)
+          echo "📱 Push tokens found: $TOKEN_COUNT"
+          
+          if [ "$TOKEN_COUNT" -eq 0 ]; then
+            echo "⚠️ No push tokens registered. Users need to allow notifications first."
+            exit 0
+          fi
+          
+          echo "✅ Notification check completed at $(TZ='Asia/Almaty' date)"
